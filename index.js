@@ -18,7 +18,7 @@ const CONFIG = {
   dataDir: process.env.DATA_DIR || __dirname,
   fileName: 'warnings.json',
   maxWarnings: 3,
-  footerText: 'RedLine Life EHMR • Warning System',
+  footerText: 'RedLine Life EHMR • Moderation & Warning System',
 };
 
 const FILE_PATH = path.join(CONFIG.dataDir, CONFIG.fileName);
@@ -38,6 +38,7 @@ const COLORS = {
   warnHigh: '#dc2626',
   playerLow: '#3b82f6',
   playerHigh: '#e11d48',
+  ban: '#b91c1c',
   success: '#22c55e',
   limit: '#991b1b',
 };
@@ -85,6 +86,40 @@ function buildSlashCommands() {
         .setRequired(false)
     );
 
+  const robloxBanCmd = new SlashCommandBuilder()
+    .setName('robloxban')
+    .setDescription('Înregistrează un ban pe Roblox (RO) cu nume, timp și dovadă')
+    .addStringOption((option) =>
+      option
+        .setName('roblox')
+        .setDescription('Numele de pe Roblox al jucătorului banat')
+        .setRequired(true)
+    )
+    .addStringOption((option) =>
+      option
+        .setName('timp')
+        .setDescription('Durata banului (ex: 7 zile, 30 zile, Permanent)')
+        .setRequired(true)
+    )
+    .addStringOption((option) =>
+      option
+        .setName('dovada')
+        .setDescription('Link dovadă (SS/video) sau descrierea dovezii')
+        .setRequired(true)
+    )
+    .addStringOption((option) =>
+      option
+        .setName('motiv')
+        .setDescription('Opțional: motivul banului')
+        .setRequired(false)
+    )
+    .addUserOption((option) =>
+      option
+        .setName('membru_discord')
+        .setDescription('Opțional: alege contul de Discord')
+        .setRequired(false)
+    );
+
   const removeWarnCmd = new SlashCommandBuilder()
     .setName('removewarn')
     .setDescription('Scoate un avertisment de staff sau de player')
@@ -117,7 +152,7 @@ function buildSlashCommands() {
         )
     );
 
-  return [staffWarnCmd, playerWarnCmd, removeWarnCmd].map((cmd) => cmd.toJSON());
+  return [staffWarnCmd, playerWarnCmd, robloxBanCmd, removeWarnCmd].map((cmd) => cmd.toJSON());
 }
 
 function ensureStorageReady() {
@@ -153,6 +188,10 @@ function getStaffKey(guildId, userId) {
 
 function getPlayerKey(guildId, robloxName) {
   return `player_${guildId}_${robloxName.trim().toLowerCase()}`;
+}
+
+function getRobloxBanKey(guildId, robloxName) {
+  return `robloxban_${guildId}_${robloxName.trim().toLowerCase()}`;
 }
 
 async function safeFetchMember(guild, userId) {
@@ -432,6 +471,56 @@ async function handlePlayerWarn(interaction, data) {
   return interaction.reply({ embeds: [embed] });
 }
 
+async function handleRobloxBan(interaction, data) {
+  const robloxName = interaction.options.getString('roblox').trim();
+  const banTime = interaction.options.getString('timp').trim();
+  const proof = interaction.options.getString('dovada').trim();
+  const reason = interaction.options.getString('motiv')?.trim() || 'Nespecificat';
+  const explicitUser = interaction.options.getUser('membru_discord');
+
+  const key = getRobloxBanKey(interaction.guildId, robloxName);
+  const matchedMember = await findDiscordMemberForRoblox(
+    interaction.guild,
+    robloxName,
+    explicitUser
+  );
+
+  data[key] = {
+    robloxUsername: robloxName,
+    discordId: matchedMember?.id || data[key]?.discordId || null,
+    duration: banTime,
+    proof,
+    reason,
+    bannedById: interaction.user.id,
+    bannedByTag: interaction.user.tag,
+    region: 'RO',
+    updatedAt: new Date().toISOString(),
+  };
+  saveWarnings(data);
+
+  const embed = new EmbedBuilder()
+    .setColor(COLORS.ban)
+    .setTitle('🔨 Ban Roblox (RO)')
+    .addFields(
+      { name: 'Nume Roblox', value: `**${robloxName}**`, inline: true },
+      { name: 'Timp / Durată', value: `**${banTime}**`, inline: true },
+      { name: 'Dat de', value: `${interaction.user}`, inline: true },
+      { name: 'Dovadă', value: proof, inline: false }
+    )
+    .setFooter({ text: 'RedLine Life EHMR • Roblox Ban Log (RO)' })
+    .setTimestamp();
+
+  if (reason !== 'Nespecificat') {
+    embed.addFields({ name: 'Motiv', value: reason, inline: false });
+  }
+
+  if (matchedMember) {
+    embed.addFields({ name: 'Membru Discord', value: `${matchedMember}`, inline: true });
+  }
+
+  return interaction.reply({ embeds: [embed] });
+}
+
 async function handleRemoveStaffWarn(interaction, data) {
   const targetUser = interaction.options.getUser('utilizator');
   const member = await safeFetchMember(interaction.guild, targetUser.id);
@@ -575,6 +664,10 @@ client.on('interactionCreate', async (interaction) => {
 
     if (interaction.commandName === 'playerwarn') {
       return await handlePlayerWarn(interaction, data);
+    }
+
+    if (interaction.commandName === 'robloxban') {
+      return await handleRobloxBan(interaction, data);
     }
 
     if (interaction.commandName === 'removewarn') {
