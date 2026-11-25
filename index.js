@@ -17,9 +17,9 @@ const FILE_PATH = path.join(__dirname, 'warnings.json');
 
 // Înlocuiește cu ID-urile reale ale rolurilor de Warn pentru jucători (1/3, 2/3, 3/3)
 const PLAYER_ROLE_MAP = {
-  1: 'ID_ROL_PLAYER_WARN_1',
-  2: 'ID_ROL_PLAYER_WARN_2',
-  3: 'ID_ROL_PLAYER_WARN_3',
+  1: '1565014816350011422',
+  2: '1565014817511837786',
+  3: '1565014818958610533',
 };
 
 const client = new Client({
