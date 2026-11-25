@@ -9,9 +9,19 @@ const {
 } = require('discord.js');
 
 // ================= CONFIGURARE =================
-const TOKEN = 'PUNE_AICI_TOKENUL_BOTULUI';
-const CLIENT_ID = 'PUNE_AICI_APPLICATION_ID_AL_BOTULUI';
-const GUILD_ID = 'PUNE_AICI_ID_SERVERULUI_TAU';
+const http = require("http");
+
+http
+  .createServer((req, res) => {
+    res.writeHead(200, { "Content-Type": "text/plain" });
+    res.end("Bot is running");
+  })
+  .listen(process.env.PORT || 10000);
+
+const TOKEN = process.env.TOKEN;
+const CLIENT_ID = process.env.CLIENT_ID;
+const GUILD_ID = process.env.GUILD_ID;
+
 
 const STAFF_WARN_CHANNEL_ID = 'ID_CANAL_STAFF_WARNS';
 const PLAYER_WARN_CHANNEL_ID = 'ID_CANAL_PLAYER_WARNS';
