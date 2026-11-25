@@ -13,7 +13,13 @@ const {
 const TOKEN = process.env.TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID;
-const FILE_PATH = path.join(__dirname, 'warnings.json');
+
+// Dacă folosești un Persistent Disk pe Render (ex. /var/data), pune DATA_DIR=/var/data în Environment Variables
+const DATA_DIR = process.env.DATA_DIR || __dirname;
+const FILE_PATH = path.join(DATA_DIR, 'warnings.json');
+
+// Înlocuiește cu ID-ul real al rolului de Staff Warn pe server
+const STAFF_WARN_ROLE_ID = 'ID_ROL_STAFF_WARN';
 
 // ID-urile rolurilor de Warn pentru jucători (1/3, 2/3, 3/3)
 const PLAYER_ROLE_MAP = {
@@ -29,7 +35,7 @@ const client = new Client({
 const commands = [
   new SlashCommandBuilder()
     .setName('staffwarn')
-    .setDescription('Oferă un avertisment de staff pe Discord (1/3, 2/3, 3/3) fără rol')
+    .setDescription('Oferă un avertisment de staff pe Discord (1/3, 2/3, 3/3) și pune rolul de Staff Warn')
     .addUserOption((option) =>
       option
         .setName('utilizator')
@@ -97,6 +103,9 @@ const commands = [
 ].map((cmd) => cmd.toJSON());
 
 function loadWarnings() {
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
   if (!fs.existsSync(FILE_PATH)) {
     fs.writeFileSync(FILE_PATH, '{}', 'utf8');
   }
@@ -109,7 +118,34 @@ function loadWarnings() {
 }
 
 function saveWarnings(data) {
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
   fs.writeFileSync(FILE_PATH, JSON.stringify(data, null, 2), 'utf8');
+}
+
+async function applyStaffWarnRole(guild, user, newCount) {
+  if (!guild || !user) return null;
+  if (!STAFF_WARN_ROLE_ID || STAFF_WARN_ROLE_ID === 'ID_ROL_STAFF_WARN') {
+    return 'Setează STAFF_WARN_ROLE_ID în cod';
+  }
+
+  const member = await guild.members.fetch(user.id).catch(() => null);
+  if (!member) return 'Membru negăsit pe server';
+
+  try {
+    if (newCount > 0) {
+      await member.roles.add(STAFF_WARN_ROLE_ID);
+      return `<@&${STAFF_WARN_ROLE_ID}>`;
+    } else if (member.roles.cache.has(STAFF_WARN_ROLE_ID)) {
+      await member.roles.remove(STAFF_WARN_ROLE_ID);
+      return 'Rol Staff Warn scos (0/3)';
+    }
+    return 'Fără rol Staff Warn';
+  } catch (err) {
+    console.error('Eroare la modificarea rolului de Staff Warn:', err);
+    return `Eroare Discord: ${err.message || 'verifică Manage Roles și poziția rolului'}`;
+  }
 }
 
 async function findDiscordMemberForRoblox(guild, robloxName, explicitUser) {
@@ -185,13 +221,34 @@ async function syncPlayerWarnRoleAfterRemove(guild, member, prevCount, newCount)
   }
 }
 
+function findPlayerWarningEntry(data, guildId, robloxInput) {
+  const normalized = robloxInput.trim().toLowerCase();
+  const exactKey = `player_${guildId}_${normalized}`;
+  if (data[exactKey]) {
+    return { key: exactKey, entry: data[exactKey] };
+  }
+
+  const fallbackKey = Object.keys(data).find((k) => {
+    if (!k.startsWith(`player_${guildId}_`)) return false;
+    const item = data[k];
+    const savedName = (item?.robloxUsername || '').trim().toLowerCase();
+    return savedName === normalized || savedName.includes(normalized);
+  });
+
+  if (fallbackKey) {
+    return { key: fallbackKey, entry: data[fallbackKey] };
+  }
+
+  return { key: exactKey, entry: null };
+}
+
 client.once('ready', async () => {
   const rest = new REST({ version: '10' }).setToken(TOKEN);
   try {
     await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), {
       body: commands,
     });
-    console.log(`Botul este online ca ${client.user.tag} și comenzile sunt gata.`);
+    console.log(`Botul este online ca ${client.user.tag} și comenzile sunt gata. Fișier date: ${FILE_PATH}`);
   } catch (err) {
     console.error('Eroare la înregistrarea comenzilor:', err);
   }
@@ -202,7 +259,7 @@ client.on('interactionCreate', async (interaction) => {
 
   const data = loadWarnings();
 
-  // ================= /staffwarn (FĂRĂ rol de warn) =================
+  // ================= /staffwarn (cu rol automat de Staff Warn) =================
   if (interaction.commandName === 'staffwarn') {
     const targetUser = interaction.options.getUser('utilizator');
     const reason = interaction.options.getString('motiv').trim();
@@ -230,6 +287,8 @@ client.on('interactionCreate', async (interaction) => {
     };
     saveWarnings(data);
 
+    const staffRoleStatus = await applyStaffWarnRole(interaction.guild, targetUser, nextCount);
+
     const embed = new EmbedBuilder()
       .setColor(nextCount === 3 ? '#dc2626' : '#f59e0b')
       .setTitle(`⚠️ Avertisment Staff (${nextCount}/3)`)
@@ -237,7 +296,8 @@ client.on('interactionCreate', async (interaction) => {
         { name: 'Membru Discord', value: `${targetUser}`, inline: true },
         { name: 'Avertismente', value: `**${nextCount}/3**`, inline: true },
         { name: 'Sancționat de', value: `${interaction.user}`, inline: true },
-        { name: 'Motiv', value: reason, inline: false }
+        { name: 'Motiv', value: reason, inline: false },
+        { name: 'Rol Staff Warn', value: staffRoleStatus || 'Niciunul', inline: true }
       )
       .setFooter({ text: 'RedLine Life EHMR • Staff Warning System' })
       .setTimestamp();
@@ -295,128 +355,3 @@ client.on('interactionCreate', async (interaction) => {
         { name: 'Motiv', value: reason, inline: false },
         { name: 'Rol Warn', value: roleStatus, inline: true }
       )
-      .setFooter({ text: 'RedLine Life EHMR • Player Warning System (Roblox)' })
-      .setTimestamp();
-
-    if (matchedMember) {
-      embed.addFields({ name: 'Membru Discord', value: `${matchedMember}`, inline: true });
-    }
-
-    return interaction.reply({ embeds: [embed] });
-  }
-
-  // ================= /removewarn (staff sau player) =================
-  if (interaction.commandName === 'removewarn') {
-    const subcommand = interaction.options.getSubcommand();
-
-    if (subcommand === 'staff') {
-      const targetUser = interaction.options.getUser('utilizator');
-      const key = `staff_${interaction.guildId}_${targetUser.id}`;
-      const currentCount = data[key]?.count || 0;
-
-      if (currentCount <= 0) {
-        return interaction.reply({
-          content: `${targetUser} nu are niciun avertisment de tip **Staff** de scos.`,
-          ephemeral: true,
-        });
-      }
-
-      const newCount = currentCount - 1;
-      if (newCount === 0) {
-        delete data[key];
-      } else {
-        data[key].count = newCount;
-        data[key].updatedAt = new Date().toISOString();
-      }
-      saveWarnings(data);
-
-      const embed = new EmbedBuilder()
-        .setColor('#22c55e')
-        .setTitle(`✅ Avertisment Staff scos (${newCount}/3)`)
-        .addFields(
-          { name: 'Membru Discord', value: `${targetUser}`, inline: true },
-          { name: 'Avertismente rămase', value: `**${newCount}/3**`, inline: true },
-          { name: 'Scos de', value: `${interaction.user}`, inline: true }
-        )
-        .setFooter({ text: 'RedLine Life EHMR • Staff Warning System' })
-        .setTimestamp();
-
-      return interaction.reply({ embeds: [embed] });
-    }
-
-    if (subcommand === 'player') {
-      const robloxName = interaction.options.getString('roblox').trim();
-      const robloxKey = robloxName.toLowerCase();
-      const explicitUser = interaction.options.getUser('membru_discord');
-      const key = `player_${interaction.guildId}_${robloxKey}`;
-      const currentCount = data[key]?.count || 0;
-
-      if (currentCount <= 0) {
-        return interaction.reply({
-          content: `Jucătorul de Roblox **${robloxName}** nu are niciun avertisment de scos.`,
-          ephemeral: true,
-        });
-      }
-
-      const newCount = currentCount - 1;
-      const savedDiscordId = data[key]?.discordId || null;
-      const storedRobloxName = data[key]?.robloxUsername || robloxName;
-
-      let matchedMember = await findDiscordMemberForRoblox(
-        interaction.guild,
-        storedRobloxName,
-        explicitUser
-      );
-      if (!matchedMember && savedDiscordId) {
-        matchedMember = await interaction.guild.members.fetch(savedDiscordId).catch(() => null);
-      }
-
-      if (newCount === 0) {
-        delete data[key];
-      } else {
-        data[key].count = newCount;
-        data[key].updatedAt = new Date().toISOString();
-      }
-      saveWarnings(data);
-
-      const roleStatus = matchedMember
-        ? await syncPlayerWarnRoleAfterRemove(
-            interaction.guild,
-            matchedMember,
-            currentCount,
-            newCount
-          )
-        : 'Nu a fost găsit membrul pe Discord';
-
-      const embed = new EmbedBuilder()
-        .setColor('#22c55e')
-        .setTitle(`✅ Avertisment Player scos (${newCount}/3)`)
-        .addFields(
-          { name: 'Jucător Roblox', value: `**${storedRobloxName}**`, inline: true },
-          { name: 'Avertismente rămase', value: `**${newCount}/3**`, inline: true },
-          { name: 'Scos de', value: `${interaction.user}`, inline: true },
-          { name: 'Rol Warn actual', value: roleStatus, inline: true }
-        )
-        .setFooter({ text: 'RedLine Life EHMR • Player Warning System (Roblox)' })
-        .setTimestamp();
-
-      if (matchedMember) {
-        embed.addFields({ name: 'Membru Discord', value: `${matchedMember}`, inline: true });
-      }
-
-      return interaction.reply({ embeds: [embed] });
-    }
-  }
-});
-
-const PORT = process.env.PORT || 3000;
-http
-  .createServer((req, res) => {
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('WarnBot Redline is running');
-  })
-  .listen(PORT, () => {
-    console.log(`Serverul HTTP ascultă pe portul ${PORT}`);
-  });
-
-client.login(TOKEN);
