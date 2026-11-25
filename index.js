@@ -15,7 +15,7 @@ const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID;
 const FILE_PATH = path.join(__dirname, 'warnings.json');
 
-// Înlocuiește cu ID-urile reale ale rolurilor de Warn pentru jucători (1/3, 2/3, 3/3)
+// ID-urile rolurilor de Warn pentru jucători (1/3, 2/3, 3/3)
 const PLAYER_ROLE_MAP = {
   1: '1565014816350011422',
   2: '1565014817511837786',
@@ -60,8 +60,39 @@ const commands = [
     .addUserOption((option) =>
       option
         .setName('membru_discord')
-        .setDescription('Opțional: alege direct contul de Discord dacă numele diferă')
+        .setDescription('Opțional: alege direct contul de Discord pentru rolul de Warn')
         .setRequired(false)
+    ),
+  new SlashCommandBuilder()
+    .setName('removewarn')
+    .setDescription('Scoate un avertisment de staff sau de player')
+    .addSubcommand((sub) =>
+      sub
+        .setName('staff')
+        .setDescription('Scoate un avertisment de staff de pe un membru Discord')
+        .addUserOption((option) =>
+          option
+            .setName('utilizator')
+            .setDescription('Membrul staff de pe Discord')
+            .setRequired(true)
+        )
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('player')
+        .setDescription('Scoate un avertisment de player după numele de Roblox')
+        .addStringOption((option) =>
+          option
+            .setName('roblox')
+            .setDescription('Numele de pe Roblox al jucătorului')
+            .setRequired(true)
+        )
+        .addUserOption((option) =>
+          option
+            .setName('membru_discord')
+            .setDescription('Opțional: alege contul de Discord dacă vrei să actualizeze rolul')
+            .setRequired(false)
+        )
     ),
 ].map((cmd) => cmd.toJSON());
 
@@ -103,15 +134,15 @@ async function findDiscordMemberForRoblox(guild, robloxName, explicitUser) {
 }
 
 async function applyAutoPlayerWarnRole(guild, member, nextCount) {
-  if (!guild || !member) return null;
+  if (!guild || !member) return 'Membru negăsit pe server';
 
   const roleId = PLAYER_ROLE_MAP[nextCount];
-  if (!roleId || roleId.startsWith('ID_ROL_')) {
-    return 'Setează ID-ul rolului în PLAYER_ROLE_MAP';
+  if (!roleId) {
+    return 'Lipsă ID rol în PLAYER_ROLE_MAP';
   }
 
   const prevRoleId = PLAYER_ROLE_MAP[nextCount - 1];
-  if (prevRoleId && !prevRoleId.startsWith('ID_ROL_') && member.roles.cache.has(prevRoleId)) {
+  if (prevRoleId && member.roles.cache.has(prevRoleId)) {
     await member.roles.remove(prevRoleId).catch((err) => {
       console.error('Eroare la scoaterea rolului anterior de Warn:', err);
     });
@@ -121,8 +152,36 @@ async function applyAutoPlayerWarnRole(guild, member, nextCount) {
     await member.roles.add(roleId);
     return `<@&${roleId}>`;
   } catch (err) {
-    console.error('Eroare la adăugarea rolului automat (verifică Manage Roles și poziția rolului):', err);
-    return 'Eroare permisiuni sau ierarhie roluri';
+    console.error('Eroare la adăugarea rolului automat:', err);
+    return `Eroare Discord: ${err.message || 'verifică Manage Roles și poziția rolului'}`;
+  }
+}
+
+async function syncPlayerWarnRoleAfterRemove(guild, member, prevCount, newCount) {
+  if (!guild || !member) return 'Membru negăsit pe server';
+
+  const oldRoleId = PLAYER_ROLE_MAP[prevCount];
+  if (oldRoleId && member.roles.cache.has(oldRoleId)) {
+    await member.roles.remove(oldRoleId).catch((err) => {
+      console.error('Eroare la scoaterea rolului vechi de Warn:', err);
+    });
+  }
+
+  if (newCount <= 0) {
+    return 'Fără rol de Warn (0/3)';
+  }
+
+  const nextRoleId = PLAYER_ROLE_MAP[newCount];
+  if (!nextRoleId) {
+    return 'Lipsă ID rol în PLAYER_ROLE_MAP';
+  }
+
+  try {
+    await member.roles.add(nextRoleId);
+    return `<@&${nextRoleId}>`;
+  } catch (err) {
+    console.error('Eroare la actualizarea rolului după removewarn:', err);
+    return `Eroare Discord: ${err.message || 'verifică Manage Roles și poziția rolului'}`;
   }
 }
 
@@ -215,7 +274,7 @@ client.on('interactionCreate', async (interaction) => {
 
     data[key] = {
       robloxUsername: robloxName,
-      discordId: matchedMember?.id || null,
+      discordId: matchedMember?.id || data[key]?.discordId || null,
       count: nextCount,
       lastReason: reason,
       updatedAt: new Date().toISOString(),
@@ -224,7 +283,7 @@ client.on('interactionCreate', async (interaction) => {
 
     const roleStatus = matchedMember
       ? await applyAutoPlayerWarnRole(interaction.guild, matchedMember, nextCount)
-      : 'Nu a fost găsit contul pe Discord';
+      : `Nu am găsit membrul pe Discord pentru "${robloxName}" (alege-l la membru_discord)`;
 
     const embed = new EmbedBuilder()
       .setColor(nextCount === 3 ? '#e11d48' : '#3b82f6')
@@ -244,6 +303,109 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     return interaction.reply({ embeds: [embed] });
+  }
+
+  // ================= /removewarn (staff sau player) =================
+  if (interaction.commandName === 'removewarn') {
+    const subcommand = interaction.options.getSubcommand();
+
+    if (subcommand === 'staff') {
+      const targetUser = interaction.options.getUser('utilizator');
+      const key = `staff_${interaction.guildId}_${targetUser.id}`;
+      const currentCount = data[key]?.count || 0;
+
+      if (currentCount <= 0) {
+        return interaction.reply({
+          content: `${targetUser} nu are niciun avertisment de tip **Staff** de scos.`,
+          ephemeral: true,
+        });
+      }
+
+      const newCount = currentCount - 1;
+      if (newCount === 0) {
+        delete data[key];
+      } else {
+        data[key].count = newCount;
+        data[key].updatedAt = new Date().toISOString();
+      }
+      saveWarnings(data);
+
+      const embed = new EmbedBuilder()
+        .setColor('#22c55e')
+        .setTitle(`✅ Avertisment Staff scos (${newCount}/3)`)
+        .addFields(
+          { name: 'Membru Discord', value: `${targetUser}`, inline: true },
+          { name: 'Avertismente rămase', value: `**${newCount}/3**`, inline: true },
+          { name: 'Scos de', value: `${interaction.user}`, inline: true }
+        )
+        .setFooter({ text: 'RedLine Life EHMR • Staff Warning System' })
+        .setTimestamp();
+
+      return interaction.reply({ embeds: [embed] });
+    }
+
+    if (subcommand === 'player') {
+      const robloxName = interaction.options.getString('roblox').trim();
+      const robloxKey = robloxName.toLowerCase();
+      const explicitUser = interaction.options.getUser('membru_discord');
+      const key = `player_${interaction.guildId}_${robloxKey}`;
+      const currentCount = data[key]?.count || 0;
+
+      if (currentCount <= 0) {
+        return interaction.reply({
+          content: `Jucătorul de Roblox **${robloxName}** nu are niciun avertisment de scos.`,
+          ephemeral: true,
+        });
+      }
+
+      const newCount = currentCount - 1;
+      const savedDiscordId = data[key]?.discordId || null;
+      const storedRobloxName = data[key]?.robloxUsername || robloxName;
+
+      let matchedMember = await findDiscordMemberForRoblox(
+        interaction.guild,
+        storedRobloxName,
+        explicitUser
+      );
+      if (!matchedMember && savedDiscordId) {
+        matchedMember = await interaction.guild.members.fetch(savedDiscordId).catch(() => null);
+      }
+
+      if (newCount === 0) {
+        delete data[key];
+      } else {
+        data[key].count = newCount;
+        data[key].updatedAt = new Date().toISOString();
+      }
+      saveWarnings(data);
+
+      const roleStatus = matchedMember
+        ? await syncPlayerWarnRoleAfterRemove(
+            interaction.guild,
+            matchedMember,
+            currentCount,
+            newCount
+          )
+        : 'Nu a fost găsit membrul pe Discord';
+
+      const embed = new EmbedBuilder()
+        .setColor('#22c55e')
+        .setTitle(`✅ Avertisment Player scos (${newCount}/3)`)
+        .addFields(
+          { name: 'Jucător Roblox', value: `**${storedRobloxName}**`, inline: true },
+          { name: 'Avertismente rămase', value: `**${newCount}/3**`, inline: true },
+          { name: 'Scos de', value: `${interaction.user}`, inline: true },
+          { name: 'Rol Warn actual', value: roleStatus, inline: true }
+        )
+        .setFooter({ text: 'RedLine Life EHMR • Player Warning System (Roblox)' })
+        .setTimestamp();
+
+      if (matchedMember) {
+        embed.addFields({ name: 'Membru Discord', value: `${matchedMember}`, inline: true });
+      }
+
+      return interaction.reply({ embeds: [embed] });
+    }
   }
 });
 
