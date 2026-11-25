@@ -15,18 +15,11 @@ const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID;
 const FILE_PATH = path.join(__dirname, 'warnings.json');
 
-// Înlocuiește cu ID-urile reale ale rolurilor de pe server (sau lasă 'ID_ROL_...' dacă nu vrei rol la acel nivel)
-const ROLE_MAP = {
-  staff: {
-    1: 'ID_ROL_STAFF_WARN_1',
-    2: 'ID_ROL_STAFF_WARN_2',
-    3: 'ID_ROL_STAFF_WARN_3',
-  },
-  player: {
-    1: 'ID_ROL_PLAYER_WARN_1',
-    2: 'ID_ROL_PLAYER_WARN_2',
-    3: 'ID_ROL_PLAYER_WARN_3',
-  },
+// Înlocuiește cu ID-urile reale ale rolurilor de Warn pentru jucători (1/3, 2/3, 3/3)
+const PLAYER_ROLE_MAP = {
+  1: 'ID_ROL_PLAYER_WARN_1',
+  2: 'ID_ROL_PLAYER_WARN_2',
+  3: 'ID_ROL_PLAYER_WARN_3',
 };
 
 const client = new Client({
@@ -36,7 +29,7 @@ const client = new Client({
 const commands = [
   new SlashCommandBuilder()
     .setName('staffwarn')
-    .setDescription('Oferă un avertisment de staff pe Discord (1/3, 2/3, 3/3)')
+    .setDescription('Oferă un avertisment de staff pe Discord (1/3, 2/3, 3/3) fără rol')
     .addUserOption((option) =>
       option
         .setName('utilizator')
@@ -51,7 +44,7 @@ const commands = [
     ),
   new SlashCommandBuilder()
     .setName('playerwarn')
-    .setDescription('Oferă un avertisment de player după numele de Roblox (1/3, 2/3, 3/3)')
+    .setDescription('Oferă un avertisment de player (1/3, 2/3, 3/3) și pune automat rolul de Warn')
     .addStringOption((option) =>
       option
         .setName('roblox')
@@ -67,7 +60,7 @@ const commands = [
     .addUserOption((option) =>
       option
         .setName('membru_discord')
-        .setDescription('Opțional: contul de Discord pentru rolul de warn')
+        .setDescription('Opțional: alege direct contul de Discord dacă numele diferă')
         .setRequired(false)
     ),
 ].map((cmd) => cmd.toJSON());
@@ -88,19 +81,39 @@ function saveWarnings(data) {
   fs.writeFileSync(FILE_PATH, JSON.stringify(data, null, 2), 'utf8');
 }
 
-async function applyWarnRole(guild, discordUser, type, nextCount) {
-  if (!guild || !discordUser) return null;
+async function findDiscordMemberForRoblox(guild, robloxName, explicitUser) {
+  if (!guild) return null;
+  if (explicitUser) {
+    return guild.members.fetch(explicitUser.id).catch(() => null);
+  }
 
-  const roleId = ROLE_MAP[type]?.[nextCount];
-  if (!roleId || roleId.startsWith('ID_ROL_')) return null;
+  const target = robloxName.trim().toLowerCase();
+  const members = await guild.members.fetch().catch(() => null);
+  if (!members) return null;
 
-  const member = await guild.members.fetch(discordUser.id).catch(() => null);
-  if (!member) return 'Membru negăsit pe server';
+  return (
+    members.find(
+      (m) =>
+        m.user.username.toLowerCase() === target ||
+        (m.user.globalName && m.user.globalName.toLowerCase() === target) ||
+        (m.nickname && m.nickname.toLowerCase() === target) ||
+        (m.nickname && m.nickname.toLowerCase().includes(target))
+    ) || null
+  );
+}
 
-  const prevRoleId = ROLE_MAP[type]?.[nextCount - 1];
+async function applyAutoPlayerWarnRole(guild, member, nextCount) {
+  if (!guild || !member) return null;
+
+  const roleId = PLAYER_ROLE_MAP[nextCount];
+  if (!roleId || roleId.startsWith('ID_ROL_')) {
+    return 'Setează ID-ul rolului în PLAYER_ROLE_MAP';
+  }
+
+  const prevRoleId = PLAYER_ROLE_MAP[nextCount - 1];
   if (prevRoleId && !prevRoleId.startsWith('ID_ROL_') && member.roles.cache.has(prevRoleId)) {
     await member.roles.remove(prevRoleId).catch((err) => {
-      console.error('Eroare la scoaterea rolului anterior:', err);
+      console.error('Eroare la scoaterea rolului anterior de Warn:', err);
     });
   }
 
@@ -108,8 +121,8 @@ async function applyWarnRole(guild, discordUser, type, nextCount) {
     await member.roles.add(roleId);
     return `<@&${roleId}>`;
   } catch (err) {
-    console.error('Eroare la adăugarea rolului (verifică Manage Roles și ierarhia rolurilor):', err);
-    return 'Eroare permisiuni/ierarhie';
+    console.error('Eroare la adăugarea rolului automat (verifică Manage Roles și poziția rolului):', err);
+    return 'Eroare permisiuni sau ierarhie roluri';
   }
 }
 
@@ -119,7 +132,7 @@ client.once('ready', async () => {
     await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), {
       body: commands,
     });
-    console.log(`Botul este online ca ${client.user.tag} și comenzile sunt înregistrate.`);
+    console.log(`Botul este online ca ${client.user.tag} și comenzile sunt gata.`);
   } catch (err) {
     console.error('Eroare la înregistrarea comenzilor:', err);
   }
@@ -130,7 +143,7 @@ client.on('interactionCreate', async (interaction) => {
 
   const data = loadWarnings();
 
-  // ================= /staffwarn (pe Discord) =================
+  // ================= /staffwarn (FĂRĂ rol de warn) =================
   if (interaction.commandName === 'staffwarn') {
     const targetUser = interaction.options.getUser('utilizator');
     const reason = interaction.options.getString('motiv').trim();
@@ -158,8 +171,6 @@ client.on('interactionCreate', async (interaction) => {
     };
     saveWarnings(data);
 
-    const roleStatus = await applyWarnRole(interaction.guild, targetUser, 'staff', nextCount);
-
     const embed = new EmbedBuilder()
       .setColor(nextCount === 3 ? '#dc2626' : '#f59e0b')
       .setTitle(`⚠️ Avertisment Staff (${nextCount}/3)`)
@@ -172,19 +183,15 @@ client.on('interactionCreate', async (interaction) => {
       .setFooter({ text: 'RedLine Life EHMR • Staff Warning System' })
       .setTimestamp();
 
-    if (roleStatus) {
-      embed.addFields({ name: 'Rol aplicat', value: roleStatus, inline: true });
-    }
-
     return interaction.reply({ embeds: [embed] });
   }
 
-  // ================= /playerwarn (pe nume de Roblox) =================
+  // ================= /playerwarn (pe nume de Roblox + rol automat) =================
   if (interaction.commandName === 'playerwarn') {
     const robloxName = interaction.options.getString('roblox').trim();
     const robloxKey = robloxName.toLowerCase();
     const reason = interaction.options.getString('motiv').trim();
-    const discordMember = interaction.options.getUser('membru_discord');
+    const explicitUser = interaction.options.getUser('membru_discord');
 
     const key = `player_${interaction.guildId}_${robloxKey}`;
     const currentCount = data[key]?.count || 0;
@@ -200,18 +207,24 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     const nextCount = currentCount + 1;
+    const matchedMember = await findDiscordMemberForRoblox(
+      interaction.guild,
+      robloxName,
+      explicitUser
+    );
+
     data[key] = {
       robloxUsername: robloxName,
-      discordId: discordMember?.id || null,
+      discordId: matchedMember?.id || null,
       count: nextCount,
       lastReason: reason,
       updatedAt: new Date().toISOString(),
     };
     saveWarnings(data);
 
-    const roleStatus = discordMember
-      ? await applyWarnRole(interaction.guild, discordMember, 'player', nextCount)
-      : null;
+    const roleStatus = matchedMember
+      ? await applyAutoPlayerWarnRole(interaction.guild, matchedMember, nextCount)
+      : 'Nu a fost găsit contul pe Discord';
 
     const embed = new EmbedBuilder()
       .setColor(nextCount === 3 ? '#e11d48' : '#3b82f6')
@@ -220,16 +233,14 @@ client.on('interactionCreate', async (interaction) => {
         { name: 'Jucător Roblox', value: `**${robloxName}**`, inline: true },
         { name: 'Avertismente', value: `**${nextCount}/3**`, inline: true },
         { name: 'Sancționat de', value: `${interaction.user}`, inline: true },
-        { name: 'Motiv', value: reason, inline: false }
+        { name: 'Motiv', value: reason, inline: false },
+        { name: 'Rol Warn', value: roleStatus, inline: true }
       )
       .setFooter({ text: 'RedLine Life EHMR • Player Warning System (Roblox)' })
       .setTimestamp();
 
-    if (discordMember) {
-      embed.addFields({ name: 'Cont Discord', value: `${discordMember}`, inline: true });
-    }
-    if (roleStatus) {
-      embed.addFields({ name: 'Rol aplicat', value: roleStatus, inline: true });
+    if (matchedMember) {
+      embed.addFields({ name: 'Membru Discord', value: `${matchedMember}`, inline: true });
     }
 
     return interaction.reply({ embeds: [embed] });
