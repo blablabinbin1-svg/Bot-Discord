@@ -14,7 +14,6 @@ const TOKEN = process.env.TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID;
 
-// Dacă folosești un Persistent Disk pe Render (ex. /var/data), pune DATA_DIR=/var/data în Environment Variables
 const DATA_DIR = process.env.DATA_DIR || __dirname;
 const FILE_PATH = path.join(DATA_DIR, 'warnings.json');
 
@@ -25,7 +24,7 @@ const STAFF_ROLE_MAP = {
   3: '1565014818958610533',
 };
 
-// Opțional: poți adăuga aici ID-urile rolurilor de Player Warn (1/3, 2/3, 3/3) dacă vrei rol automat și la playeri
+// Opțional: ID-urile rolurilor de Player Warn (1/3, 2/3, 3/3)
 const PLAYER_ROLE_MAP = {};
 
 const client = new Client({
@@ -122,6 +121,7 @@ function saveWarnings(data) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
   }
   fs.writeFileSync(FILE_PATH, JSON.stringify(data, null, 2), 'utf8');
+  console.log(`[WARNINGS SAVED] Fișier: ${FILE_PATH} | Intrări active: ${Object.keys(data).length}`);
 }
 
 async function applyStaffWarnRoleOnAdd(guild, user, nextCount) {
@@ -408,9 +408,11 @@ client.on('interactionCreate', async (interaction) => {
       const key = `staff_${interaction.guildId}_${targetUser.id}`;
       const currentCount = data[key]?.count || 0;
 
+      console.log(`[REMOVEWARN STAFF] Key: ${key} | Current: ${currentCount} | File: ${FILE_PATH}`);
+
       if (currentCount <= 0) {
         return interaction.reply({
-          content: `${targetUser} nu are avertismente înregistrate (0/3).`,
+          content: `${targetUser} nu are avertismente înregistrate în \`${FILE_PATH}\` (0/3).`,
           ephemeral: true,
         });
       }
@@ -452,9 +454,11 @@ client.on('interactionCreate', async (interaction) => {
       const { key, entry } = findPlayerWarningEntry(data, interaction.guildId, robloxInput);
       const currentCount = entry?.count || 0;
 
+      console.log(`[REMOVEWARN PLAYER] Input: ${robloxInput} | Key: ${key} | Current: ${currentCount} | File: ${FILE_PATH}`);
+
       if (!entry || currentCount <= 0) {
         return interaction.reply({
-          content: `Jucătorul de Roblox **${robloxInput}** nu are avertismente înregistrate (0/3).`,
+          content: `Jucătorul de Roblox **${robloxInput}** nu are avertismente înregistrate în \`${FILE_PATH}\` (0/3).`,
           ephemeral: true,
         });
       }
