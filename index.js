@@ -3,7 +3,6 @@ const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, Permission
 
 const { TOKEN, CLIENT_ID, GUILD_ID, PORT } = process.env;
 
-// Server HTTP minim pentru Render Web Service
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
   res.end('Botul ruleaza.');
@@ -32,7 +31,7 @@ const commands = [
 
 const rest = new REST({ version: '10' }).setToken(TOKEN);
 
-client.once('clientReady', async () => {
+client.once('ready', async () => {
   console.log(`Botul este online ca ${client.user.tag}`);
   try {
     console.log('Încep înregistrarea comenzilor pe server...');
