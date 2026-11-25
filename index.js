@@ -13,17 +13,20 @@ const {
 const TOKEN = process.env.TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID;
-const FILE_PATH = path.join(__dirname, 'warnings.json');
 
-// Pune aici ID-ul rolului de Staff Warn (sau lasă-l așa dacă nu vrei rol la staff warn)
-const STAFF_WARN_ROLE_ID = 'ID_ROL_STAFF_WARN';
+// Dacă folosești un Persistent Disk pe Render (ex. /var/data), pune DATA_DIR=/var/data în Environment Variables
+const DATA_DIR = process.env.DATA_DIR || __dirname;
+const FILE_PATH = path.join(DATA_DIR, 'warnings.json');
 
-// ID-urile rolurilor de Warn pentru jucători (1/3, 2/3, 3/3)
-const PLAYER_ROLE_MAP = {
+// ID-urile rolurilor de Staff Warn (1/3, 2/3, 3/3)
+const STAFF_ROLE_MAP = {
   1: '1565014816350011422',
   2: '1565014817511837786',
   3: '1565014818958610533',
 };
+
+// Opțional: poți adăuga aici ID-urile rolurilor de Player Warn (1/3, 2/3, 3/3) dacă vrei rol automat și la playeri
+const PLAYER_ROLE_MAP = {};
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
@@ -47,7 +50,7 @@ const commands = [
     ),
   new SlashCommandBuilder()
     .setName('playerwarn')
-    .setDescription('Oferă un avertisment de player (1/3, 2/3, 3/3) și pune automat rolul de Warn')
+    .setDescription('Oferă un avertisment de player (1/3, 2/3, 3/3) după numele de Roblox')
     .addStringOption((option) =>
       option
         .setName('roblox')
@@ -63,7 +66,7 @@ const commands = [
     .addUserOption((option) =>
       option
         .setName('membru_discord')
-        .setDescription('Opțional: alege direct contul de Discord pentru rolul de Warn')
+        .setDescription('Opțional: alege direct contul de Discord')
         .setRequired(false)
     ),
   new SlashCommandBuilder()
@@ -93,13 +96,16 @@ const commands = [
         .addUserOption((option) =>
           option
             .setName('membru_discord')
-            .setDescription('Opțional: alege contul de Discord dacă vrei să actualizeze rolul')
+            .setDescription('Opțional: alege contul de Discord')
             .setRequired(false)
         )
     ),
 ].map((cmd) => cmd.toJSON());
 
 function loadWarnings() {
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
   if (!fs.existsSync(FILE_PATH)) {
     fs.writeFileSync(FILE_PATH, '{}', 'utf8');
   }
@@ -112,30 +118,66 @@ function loadWarnings() {
 }
 
 function saveWarnings(data) {
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
   fs.writeFileSync(FILE_PATH, JSON.stringify(data, null, 2), 'utf8');
 }
 
-async function applyStaffWarnRole(guild, user, newCount) {
+async function applyStaffWarnRoleOnAdd(guild, user, nextCount) {
   if (!guild || !user) return 'Membru negăsit pe server';
-  if (!STAFF_WARN_ROLE_ID || STAFF_WARN_ROLE_ID === 'ID_ROL_STAFF_WARN') {
-    return 'Fără rol configurat';
+
+  const roleId = STAFF_ROLE_MAP[nextCount];
+  if (!roleId) {
+    return 'Lipsă ID rol în STAFF_ROLE_MAP';
   }
 
   const member = await guild.members.fetch(user.id).catch(() => null);
   if (!member) return 'Membru negăsit pe server';
 
+  const prevRoleId = STAFF_ROLE_MAP[nextCount - 1];
+  if (prevRoleId && member.roles.cache.has(prevRoleId)) {
+    await member.roles.remove(prevRoleId).catch((err) => {
+      console.error('Eroare la scoaterea rolului anterior de Staff Warn:', err);
+    });
+  }
+
   try {
-    if (newCount > 0) {
-      await member.roles.add(STAFF_WARN_ROLE_ID);
-      return `<@&${STAFF_WARN_ROLE_ID}>`;
-    }
-    if (member.roles.cache.has(STAFF_WARN_ROLE_ID)) {
-      await member.roles.remove(STAFF_WARN_ROLE_ID);
-      return 'Rol scos (0/3)';
-    }
-    return 'Fără rol';
+    await member.roles.add(roleId);
+    return `<@&${roleId}>`;
   } catch (err) {
-    console.error('Eroare la modificarea rolului de Staff Warn:', err);
+    console.error('Eroare la adăugarea rolului de Staff Warn:', err);
+    return `Eroare permisiuni/ierarhie: ${err.message}`;
+  }
+}
+
+async function syncStaffWarnRoleOnRemove(guild, user, prevCount, newCount) {
+  if (!guild || !user) return 'Membru negăsit pe server';
+
+  const member = await guild.members.fetch(user.id).catch(() => null);
+  if (!member) return 'Membru negăsit pe server';
+
+  const oldRoleId = STAFF_ROLE_MAP[prevCount];
+  if (oldRoleId && member.roles.cache.has(oldRoleId)) {
+    await member.roles.remove(oldRoleId).catch((err) => {
+      console.error('Eroare la scoaterea rolului vechi de Staff Warn:', err);
+    });
+  }
+
+  if (newCount <= 0) {
+    return 'Fără rol Staff Warn (0/3)';
+  }
+
+  const nextRoleId = STAFF_ROLE_MAP[newCount];
+  if (!nextRoleId) {
+    return 'Lipsă ID rol în STAFF_ROLE_MAP';
+  }
+
+  try {
+    await member.roles.add(nextRoleId);
+    return `<@&${nextRoleId}>`;
+  } catch (err) {
+    console.error('Eroare la actualizarea rolului de Staff Warn după removewarn:', err);
     return `Eroare permisiuni/ierarhie: ${err.message}`;
   }
 }
@@ -165,7 +207,9 @@ async function applyAutoPlayerWarnRole(guild, member, nextCount) {
   if (!guild || !member) return 'Membru negăsit pe server';
 
   const roleId = PLAYER_ROLE_MAP[nextCount];
-  if (!roleId) return 'Lipsă ID rol în PLAYER_ROLE_MAP';
+  if (!roleId) {
+    return 'Fără rol configurat pentru player';
+  }
 
   const prevRoleId = PLAYER_ROLE_MAP[nextCount - 1];
   if (prevRoleId && member.roles.cache.has(prevRoleId)) {
@@ -198,7 +242,9 @@ async function syncPlayerWarnRoleAfterRemove(guild, member, prevCount, newCount)
   }
 
   const nextRoleId = PLAYER_ROLE_MAP[newCount];
-  if (!nextRoleId) return 'Lipsă ID rol în PLAYER_ROLE_MAP';
+  if (!nextRoleId) {
+    return 'Fără rol configurat pentru player';
+  }
 
   try {
     await member.roles.add(nextRoleId);
@@ -236,7 +282,7 @@ client.once('ready', async () => {
     await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), {
       body: commands,
     });
-    console.log(`Botul este online ca ${client.user.tag} și comenzile sunt gata.`);
+    console.log(`Botul este online ca ${client.user.tag} și comenzile sunt gata. Fișier date: ${FILE_PATH}`);
   } catch (err) {
     console.error('Eroare la înregistrarea comenzilor:', err);
   }
@@ -275,7 +321,7 @@ client.on('interactionCreate', async (interaction) => {
     };
     saveWarnings(data);
 
-    const staffRoleStatus = await applyStaffWarnRole(interaction.guild, targetUser, nextCount);
+    const staffRoleStatus = await applyStaffWarnRoleOnAdd(interaction.guild, targetUser, nextCount);
 
     const embed = new EmbedBuilder()
       .setColor(nextCount === 3 ? '#dc2626' : '#f59e0b')
@@ -378,7 +424,12 @@ client.on('interactionCreate', async (interaction) => {
       }
       saveWarnings(data);
 
-      const staffRoleStatus = await applyStaffWarnRole(interaction.guild, targetUser, newCount);
+      const staffRoleStatus = await syncStaffWarnRoleOnRemove(
+        interaction.guild,
+        targetUser,
+        currentCount,
+        newCount
+      );
 
       const embed = new EmbedBuilder()
         .setColor('#22c55e')
