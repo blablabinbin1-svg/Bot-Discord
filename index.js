@@ -47,6 +47,14 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
 });
 
+process.on('unhandledRejection', (err) => {
+  console.error('[UNHANDLED REJECTION]:', err);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('[UNCAUGHT EXCEPTION]:', err);
+});
+
 function buildSlashCommands() {
   const staffWarnCmd = new SlashCommandBuilder()
     .setName('staffwarn')
@@ -272,7 +280,7 @@ async function findDiscordMemberForRoblox(guild, robloxName, explicitUser) {
   }
 
   const target = robloxName.trim().toLowerCase();
-  const members = await guild.members.fetch().catch(() => null);
+  const members = await guild.members.fetch({ time: 5000 }).catch(() => null);
   if (!members) return null;
 
   return (
@@ -380,7 +388,7 @@ async function handleStaffWarn(interaction, data) {
       )
       .setTimestamp();
 
-    return interaction.reply({ embeds: [limitEmbed], ephemeral: true });
+    return interaction.editReply({ embeds: [limitEmbed] });
   }
 
   const nextCount = currentCount + 1;
@@ -408,7 +416,7 @@ async function handleStaffWarn(interaction, data) {
     .setFooter({ text: CONFIG.footerText })
     .setTimestamp();
 
-  return interaction.reply({ embeds: [embed] });
+  return interaction.editReply({ embeds: [embed] });
 }
 
 async function handlePlayerWarn(interaction, data) {
@@ -428,7 +436,7 @@ async function handlePlayerWarn(interaction, data) {
       )
       .setTimestamp();
 
-    return interaction.reply({ embeds: [limitEmbed], ephemeral: true });
+    return interaction.editReply({ embeds: [limitEmbed] });
   }
 
   const nextCount = currentCount + 1;
@@ -468,7 +476,7 @@ async function handlePlayerWarn(interaction, data) {
     embed.addFields({ name: 'Membru Discord', value: `${matchedMember}`, inline: true });
   }
 
-  return interaction.reply({ embeds: [embed] });
+  return interaction.editReply({ embeds: [embed] });
 }
 
 async function handleRobloxBan(interaction, data) {
@@ -518,7 +526,7 @@ async function handleRobloxBan(interaction, data) {
     embed.addFields({ name: 'Membru Discord', value: `${matchedMember}`, inline: true });
   }
 
-  return interaction.reply({ embeds: [embed] });
+  return interaction.editReply({ embeds: [embed] });
 }
 
 async function handleRemoveStaffWarn(interaction, data) {
@@ -558,7 +566,7 @@ async function handleRemoveStaffWarn(interaction, data) {
     .setFooter({ text: CONFIG.footerText })
     .setTimestamp();
 
-  return interaction.reply({ embeds: [embed] });
+  return interaction.editReply({ embeds: [embed] });
 }
 
 async function handleRemovePlayerWarn(interaction, data) {
@@ -614,7 +622,7 @@ async function handleRemovePlayerWarn(interaction, data) {
     embed.addFields({ name: 'Membru Discord', value: `${matchedMember}`, inline: true });
   }
 
-  return interaction.reply({ embeds: [embed] });
+  return interaction.editReply({ embeds: [embed] });
 }
 
 async function registerGuildCommands() {
@@ -655,6 +663,7 @@ client.once('clientReady', async () => {
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
+  await interaction.deferReply().catch(() => null);
   const data = loadWarnings();
 
   try {
@@ -681,11 +690,12 @@ client.on('interactionCreate', async (interaction) => {
     }
   } catch (err) {
     console.error('[INTERACTION ERROR]:', err);
-    if (!interaction.replied && !interaction.deferred) {
-      await interaction.reply({
-        content: 'A apărut o eroare la procesarea comenzii.',
-        ephemeral: true,
-      });
+    if (interaction.deferred || interaction.replied) {
+      await interaction
+        .editReply({
+          content: 'A apărut o eroare la procesarea comenzii.',
+        })
+        .catch(() => null);
     }
   }
 });
